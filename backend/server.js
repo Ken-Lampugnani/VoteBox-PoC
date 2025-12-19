@@ -1,0 +1,251 @@
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+
+const app = express();
+const PORT = 3000;
+
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+
+// Test-Benutzer
+const users = {
+  voter1: { username: 'voter1', password: 'test123', role: 'voter' },
+  voter2: { username: 'voter2', password: 'test123', role: 'voter' },
+  voter3: { username: 'voter3', password: 'test123', role: 'voter' },
+  voter4: { username: 'voter4', password: 'test123', role: 'voter' },
+  voter5: { username: 'voter5', password: 'test123', role: 'voter' },
+  admin: { username: 'admin', password: 'admin123', role: 'admin' },
+  validator: { username: 'validator', password: 'val123', role: 'validator' }
+};
+
+// Temporärer Speicher
+let proposals = [];
+let nextId = 1;
+
+// Schwellenwert für Relevanzschwelle
+const RELEVANCE_THRESHOLD = 5;
+
+// Login
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  const user = users[username];
+  
+  if (user && user.password === password) {
+    res.json({ 
+      success: true, 
+      user: { username: user.username, role: user.role } 
+    });
+  } else {
+    res.status(401).json({ success: false, message: 'Ungültige Anmeldedaten' });
+  }
+});
+
+// Alle Vorschläge abrufen (rollenbasiert)
+app.get('/api/proposals', (req, res) => {
+  const { role } = req.query;
+
+  if (role === 'voter') {
+    // Voter sehen erst nach Admin-Rechtscheck (bei dir: entscheidung_pending)
+    return res.json(proposals.filter(p => p.status === 'entscheidung_pending'));
+  }
+
+  if (role === 'validator') {
+    // Validator sieht NUR Vorschläge zur Validierung
+    return res.json(proposals.filter(p => p.status === 'validierung'));
+  }
+
+  // Admin sieht ALLES (Tabs im Frontend filtern)
+  return res.json(proposals);
+});
+
+
+
+// Vorschlag einreichen
+app.post('/api/proposals', (req, res) => {
+  const { title, description, author, isAnonymous, submitter } = req.body;
+  
+  // Automatische Filterprüfung (einfache Keyword-Prüfung)
+  const inappropriateWords = ['badword1', 'badword2']; // Beispiel
+  const hasInappropriateContent = inappropriateWords.some(word => 
+    title.toLowerCase().includes(word) || description.toLowerCase().includes(word)
+  );
+  
+  const newProposal = {
+    id: nextId++,
+    title,
+    description,
+    author: isAnonymous ? 'Anonym' : author,
+    submitter,
+    timestamp: new Date().toISOString(),
+    votes: 0,
+    voters: [],
+    commitments: [],
+    status: hasInappropriateContent ? 'abgelehnt_filter' : 'validierung',
+    rejectionReason: hasInappropriateContent ? 'Unangemessener Inhalt erkannt' : null,
+    legalCheck: false,
+    schoolDecision: null
+  };
+  
+  proposals.unshift(newProposal);
+  res.status(201).json(newProposal);
+});
+
+// Vorschlag abstimmen
+app.post('/api/proposals/:id/vote', (req, res) => {
+  const { id } = req.params;
+  const { username } = req.body;
+
+  const proposal = proposals.find(p => p.id === parseInt(id));
+
+  if (!proposal) {
+    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  }
+
+  // Voting ist nur in der Phase "entscheidung_pending" erlaubt
+  if (proposal.status !== 'entscheidung_pending') {
+    return res.status(403).json({ message: 'Abstimmen ist in diesem Status nicht erlaubt' });
+  }
+
+  // Check ob User bereits abgestimmt hat
+  if (proposal.voters.includes(username)) {
+    return res.status(400).json({ message: 'Du hast bereits abgestimmt' });
+  }
+
+  proposal.votes++;
+  proposal.voters.push(username);
+
+  return res.json(proposal);
+});
+
+
+// Validator: Vorschlag freigeben
+// Validator: Vorschlag formell freigeben (ohne Veröffentlichung)
+// Validator: Vorschlag formell freigeben (-> rechtliche_prüfung)
+app.post('/api/proposals/:id/approve', (req, res) => {
+  const { id } = req.params;
+  const proposal = proposals.find(p => p.id === parseInt(id));
+
+  if (!proposal) {
+    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  }
+
+  if (proposal.status !== 'validierung') {
+    return res.status(400).json({ message: 'Nur Vorschläge im Status "validierung" können freigegeben werden' });
+  }
+
+  proposal.status = 'rechtliche_prüfung';
+  res.json(proposal);
+});
+
+
+// Validator: Vorschlag ablehnen
+app.post('/api/proposals/:id/reject', (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  const proposal = proposals.find(p => p.id === parseInt(id));
+  
+  if (!proposal) {
+    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  }
+  
+  proposal.status = 'abgelehnt_validator';
+  proposal.rejectionReason = reason;
+  res.json(proposal);
+});
+
+// Admin: Rechtliche Prüfung abschließen
+app.post('/api/proposals/:id/legal-check', (req, res) => {
+  const { id } = req.params;
+  const { approved } = req.body;
+  const proposal = proposals.find(p => p.id === parseInt(id));
+
+  if (!proposal) {
+    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  }
+
+if (approved) {
+  // Nach rechtlicher Prüfung geht es in die Voting/Veröffentlichungsphase
+  proposal.status = 'entscheidung_pending';
+  proposal.legalCheck = true;
+} else {
+    proposal.status = 'abgelehnt_rechtlich';
+    proposal.rejectionReason = 'Rechtliche Gründe';
+  }
+
+  res.json(proposal);
+});
+
+
+// Admin: Schulleitung Entscheidung
+app.post('/api/proposals/:id/decision', (req, res) => {
+  const { id } = req.params;
+  const { decision } = req.body;
+  const proposal = proposals.find(p => p.id === parseInt(id));
+  
+  if (!proposal) {
+    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  }
+  // ✅ Entscheidung nur erlauben, wenn Relevanzschwelle erreicht ist
+if (proposal.votes < RELEVANCE_THRESHOLD) {
+  return res.status(403).json({
+    message: `Entscheidung erst ab ${RELEVANCE_THRESHOLD} Stimmen möglich`
+  });
+}
+
+  proposal.schoolDecision = decision;
+  
+  switch(decision) {
+    case 'angenommen':
+      proposal.status = 'angenommen';
+      break;
+    case 'in_bearbeitung':
+      proposal.status = 'in_bearbeitung';
+      break;
+    case 'abgelehnt':
+      proposal.status = 'abgelehnt';
+      break;
+  }
+  
+  res.json(proposal);
+});
+
+// Vorschlag löschen (Admin)
+app.delete('/api/proposals/:id', (req, res) => {
+  const { id } = req.params;
+  const index = proposals.findIndex(p => p.id === parseInt(id));
+  
+  if (index === -1) {
+    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  }
+  
+  proposals.splice(index, 1);
+  res.json({ message: 'Vorschlag gelöscht' });
+});
+// Commitment: Mithelfen bei der Umsetzung
+app.post('/api/proposals/:id/commit', (req, res) => {
+  const { id } = req.params;
+  const { username } = req.body;
+
+  const proposal = proposals.find(p => p.id === parseInt(id));
+  if (!proposal) {
+    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  }
+
+  // Nur sinnvoll bei Umsetzung / angenommen
+if (!['entscheidung_pending', 'in_bearbeitung', 'angenommen'].includes(proposal.status)) {
+    return res.status(403).json({ message: 'Commitment in diesem Status nicht möglich' });
+  }
+
+  if (proposal.commitments.includes(username)) {
+    return res.status(400).json({ message: 'Du hast dich bereits eingetragen' });
+  }
+
+  proposal.commitments.push(username);
+  res.json(proposal);
+});
+
+app.listen(PORT, () => {
+  console.log(`Backend läuft auf http://localhost:${PORT}`);
+});
