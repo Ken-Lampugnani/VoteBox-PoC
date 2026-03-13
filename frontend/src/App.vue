@@ -678,6 +678,7 @@ export default {
       chatInputs: {},
       openChats: {},
       unreadCount: 0,
+      pollInterval: null,
       RELEVANCE_THRESHOLD
     };
   },
@@ -761,9 +762,14 @@ export default {
     try {
       this.currentUser = JSON.parse(saved);
       this.loadProposals();
+      this.startPolling();
     } catch (e) {
       sessionStorage.removeItem('session_user');
     }
+  },
+
+  beforeUnmount() {
+    this.stopPolling();
   },
 
   methods: {
@@ -861,12 +867,29 @@ export default {
     },
     
     logout() {
+      this.stopPolling();
       sessionStorage.removeItem('session_user');
       this.currentUser = null;
       this.proposals = [];
       this.loginUsername = '';
       this.loginPassword = '';
       this.loginError = '';
+    },
+
+    startPolling() {
+      this.stopPolling();
+      this.pollInterval = setInterval(() => {
+        this.loadProposals();
+        if (this.activeTab === 'overview') this.loadOverview();
+        if (this.activeTab === 'chats') this.loadOverview().then(() => this.loadAllChats());
+      }, 3000);
+    },
+
+    stopPolling() {
+      if (this.pollInterval) {
+        clearInterval(this.pollInterval);
+        this.pollInterval = null;
+      }
     },
 
     async loadProposals() {
