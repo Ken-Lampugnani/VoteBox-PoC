@@ -1,9 +1,4 @@
 # 🗳️ VoteBox
-
-Eine digitale Abstimmungsplattform für Schulen. Schüler\*innen können Vorschläge einreichen, darüber abstimmen und mit der Schulleitung kommunizieren.
-
----
-
 ## Voraussetzungen
 
 - [Node.js](https://nodejs.org/) (v18 oder neuer)
