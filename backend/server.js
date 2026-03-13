@@ -25,7 +25,7 @@ let proposals = [];
 let nextId = 1;
 
 // Schwellenwert für Relevanzschwelle
-const RELEVANCE_THRESHOLD = 5;
+const RELEVANCE_THRESHOLD = 2;
 
 // Login
 app.post('/api/login', (req, res) => {
@@ -47,8 +47,11 @@ app.get('/api/proposals', (req, res) => {
   const { role } = req.query;
 
   if (role === 'voter') {
-    // Voter sehen erst nach Admin-Rechtscheck (bei dir: entscheidung_pending)
-    return res.json(proposals.filter(p => p.status === 'entscheidung_pending'));
+    return res.json(proposals.filter(p =>
+      p.status === 'entscheidung_pending' ||
+      p.status === 'angenommen' ||
+      p.status === 'abgelehnt'
+    ));
   }
 
   if (role === 'validator') {
@@ -61,6 +64,11 @@ app.get('/api/proposals', (req, res) => {
 });
 
 
+
+// Alle Vorschläge für Übersicht (rollenunabhängig, nur lesen)
+app.get('/api/proposals/overview', (req, res) => {
+  return res.json(proposals);
+});
 
 // Vorschlag einreichen
 app.post('/api/proposals', (req, res) => {
@@ -151,14 +159,14 @@ app.post('/api/proposals/:id/reject', (req, res) => {
   }
   
   proposal.status = 'abgelehnt_validator';
-  proposal.rejectionReason = reason;
+  proposal.rejectionReason = 'Formelle Erwartungen nicht erfüllt';
   res.json(proposal);
 });
 
 // Admin: Rechtliche Prüfung abschließen
 app.post('/api/proposals/:id/legal-check', (req, res) => {
   const { id } = req.params;
-  const { approved } = req.body;
+  const { approved, reason } = req.body;
   const proposal = proposals.find(p => p.id === parseInt(id));
 
   if (!proposal) {
@@ -171,7 +179,7 @@ if (approved) {
   proposal.legalCheck = true;
 } else {
     proposal.status = 'abgelehnt_rechtlich';
-    proposal.rejectionReason = 'Rechtliche Gründe';
+    proposal.rejectionReason = reason || null;
   }
 
   res.json(proposal);
@@ -181,30 +189,28 @@ if (approved) {
 // Admin: Schulleitung Entscheidung
 app.post('/api/proposals/:id/decision', (req, res) => {
   const { id } = req.params;
-  const { decision } = req.body;
+  const { decision, reason } = req.body;
   const proposal = proposals.find(p => p.id === parseInt(id));
   
   if (!proposal) {
     return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
   }
-  // ✅ Entscheidung nur erlauben, wenn Relevanzschwelle erreicht ist
-if (proposal.votes < RELEVANCE_THRESHOLD) {
-  return res.status(403).json({
-    message: `Entscheidung erst ab ${RELEVANCE_THRESHOLD} Stimmen möglich`
-  });
-}
+  if (proposal.votes < RELEVANCE_THRESHOLD) {
+    return res.status(403).json({
+      message: `Entscheidung erst ab ${RELEVANCE_THRESHOLD} Stimmen möglich`
+    });
+  }
 
   proposal.schoolDecision = decision;
   
   switch(decision) {
     case 'angenommen':
       proposal.status = 'angenommen';
-      break;
-    case 'in_bearbeitung':
-      proposal.status = 'in_bearbeitung';
+      proposal.rejectionReason = null;
       break;
     case 'abgelehnt':
       proposal.status = 'abgelehnt';
+      proposal.rejectionReason = reason || null;
       break;
   }
   
@@ -234,7 +240,7 @@ app.post('/api/proposals/:id/commit', (req, res) => {
   }
 
   // Nur sinnvoll bei Umsetzung / angenommen
-if (!['entscheidung_pending', 'in_bearbeitung', 'angenommen'].includes(proposal.status)) {
+if (!['entscheidung_pending', 'angenommen'].includes(proposal.status)) {
     return res.status(403).json({ message: 'Commitment in diesem Status nicht möglich' });
   }
 
@@ -244,6 +250,63 @@ if (!['entscheidung_pending', 'in_bearbeitung', 'angenommen'].includes(proposal.
 
   proposal.commitments.push(username);
   res.json(proposal);
+});
+
+// ── CHAT ──────────────────────────────────────────────
+
+// Nachrichten eines Vorschlags abrufen
+app.get('/api/proposals/:id/messages', (req, res) => {
+  const { id } = req.params;
+  const { username, role } = req.query;
+  const proposal = proposals.find(p => p.id === parseInt(id));
+
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+
+  // Zugriff: nur Admin oder Committed-Voter
+  const isAdmin = role === 'admin';
+  const isCommitted = proposal.commitments.includes(username);
+  if (!isAdmin && !isCommitted) {
+    return res.status(403).json({ message: 'Kein Zugriff auf diesen Chat' });
+  }
+
+  res.json(proposal.messages || []);
+});
+
+// Nachricht senden
+app.post('/api/proposals/:id/messages', (req, res) => {
+  const { id } = req.params;
+  const { username, role, text } = req.body;
+  const proposal = proposals.find(p => p.id === parseInt(id));
+
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  if (!text?.trim()) return res.status(400).json({ message: 'Nachricht darf nicht leer sein' });
+
+  const isAdmin = role === 'admin';
+  const isCommitted = proposal.commitments.includes(username);
+
+  // Admin darf immer schreiben; Voter nur wenn Admin schon eine Nachricht gesendet hat
+  if (!isAdmin && !isCommitted) {
+    return res.status(403).json({ message: 'Kein Zugriff' });
+  }
+  if (!isAdmin) {
+    const adminStarted = (proposal.messages || []).some(m => m.role === 'admin');
+    if (!adminStarted) {
+      return res.status(403).json({ message: 'Warte bis der Admin den Chat startet' });
+    }
+  }
+
+  if (!proposal.messages) proposal.messages = [];
+
+  const msg = {
+    id: Date.now(),
+    username,
+    role,
+    text: text.trim(),
+    timestamp: new Date().toISOString()
+  };
+
+  proposal.messages.push(msg);
+  res.status(201).json(msg);
 });
 
 app.listen(PORT, () => {
