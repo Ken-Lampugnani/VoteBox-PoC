@@ -21,8 +21,57 @@ const users = {
 };
 
 // Temporärer Speicher
-let proposals = [];
-let nextId = 1;
+let proposals = [
+  {
+    id: 1,
+    title: 'Schüler-Pausenhof-Umgestaltung',
+    description: 'Wir möchten den Pausenhof gemütlicher und attraktiver gestalten – mit Sitzmöglichkeiten, Pflanzen, Spielen und Graffiti-Wänden. Bevor wir Pläne umsetzen, sollen alle Schüler*innen über die besten Ideen abstimmen, damit wir genau wissen, welche Bereiche am wichtigsten sind und welche Vorschläge die größte Zustimmung haben.',
+    author: 'Anonym',
+    submitter: 'voter1',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
+    votes: 0,
+    voters: [],
+    commitments: [],
+    status: 'validierung',
+    rejectionReason: null,
+    legalCheck: true,
+    schoolDecision: null,
+    messages: []
+  },
+  {
+    id: 2,
+    title: '17 Wochen Ferien pro Jahr',
+    description: 'Wir schlagen vor, die Ferien auf insgesamt 17 Wochen im Jahr auszudehnen – also fast die Hälfte des Schuljahres. Das würde mehr Freizeit, Erholung und Möglichkeiten für Reisen bieten.',
+    author: 'Max Muster',
+    submitter: 'voter2',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
+    votes: 0,
+    voters: [],
+    commitments: [],
+    status: 'validierung',
+    rejectionReason: null,
+    legalCheck: true,
+    schoolDecision: null,
+    messages: []
+  },
+  {
+    id: 3,
+    title: 'Kürzere Mittagspausen',
+    description: 'Ich schlage vor weniger Mittagspause zu  machen, damit wir früher nach Hause gehen können.',
+    author: 'Anonym',
+    submitter: 'voter3',
+    timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
+    votes: 0,
+    voters: [],
+    commitments: [],
+    status: 'validierung',
+    rejectionReason: null,
+    legalCheck: false,
+    schoolDecision: null,
+    messages: []
+  }
+];
+let nextId = 4;
 
 // Schwellenwert für Relevanzschwelle
 const RELEVANCE_THRESHOLD = 2;
