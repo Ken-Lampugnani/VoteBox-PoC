@@ -36,7 +36,8 @@ let proposals = [
     rejectionReason: null,
     legalCheck: true,
     schoolDecision: null,
-    messages: []
+    messages: [],
+    commitmentEnabled: false  // NEU: Validator entscheidet ob Mithelfen möglich ist
   },
   {
     id: 2,
@@ -52,26 +53,11 @@ let proposals = [
     rejectionReason: null,
     legalCheck: true,
     schoolDecision: null,
-    messages: []
+    messages: [],
+    commitmentEnabled: false  // NEU
   },
-  {
-    id: 3,
-    title: 'Kürzere Mittagspausen',
-    description: 'Ich schlage vor weniger Mittagspause zu  machen, damit wir früher nach Hause gehen können.',
-    author: 'Anonym',
-    submitter: 'voter3',
-    timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-    votes: 0,
-    voters: [],
-    commitments: [],
-    status: 'validierung',
-    rejectionReason: null,
-    legalCheck: false,
-    schoolDecision: null,
-    messages: []
-  }
 ];
-let nextId = 4;
+let nextId = 3;
 
 // Schwellenwert für Relevanzschwelle
 const RELEVANCE_THRESHOLD = 2;
@@ -104,15 +90,12 @@ app.get('/api/proposals', (req, res) => {
   }
 
   if (role === 'validator') {
-    // Validator sieht NUR Vorschläge zur Validierung
     return res.json(proposals.filter(p => p.status === 'validierung'));
   }
 
-  // Admin sieht ALLES (Tabs im Frontend filtern)
+  // Admin sieht ALLES
   return res.json(proposals);
 });
-
-
 
 // Alle Vorschläge für Übersicht (rollenunabhängig, nur lesen)
 app.get('/api/proposals/overview', (req, res) => {
@@ -123,8 +106,7 @@ app.get('/api/proposals/overview', (req, res) => {
 app.post('/api/proposals', (req, res) => {
   const { title, description, author, isAnonymous, submitter } = req.body;
   
-  // Automatische Filterprüfung (einfache Keyword-Prüfung)
-  const inappropriateWords = ['badword1', 'badword2']; // Beispiel
+  const inappropriateWords = ['badword1', 'badword2'];
   const hasInappropriateContent = inappropriateWords.some(word => 
     title.toLowerCase().includes(word) || description.toLowerCase().includes(word)
   );
@@ -142,7 +124,9 @@ app.post('/api/proposals', (req, res) => {
     status: hasInappropriateContent ? 'abgelehnt_filter' : 'validierung',
     rejectionReason: hasInappropriateContent ? 'Unangemessener Inhalt erkannt' : null,
     legalCheck: false,
-    schoolDecision: null
+    schoolDecision: null,
+    messages: [],
+    commitmentEnabled: false  // NEU: Standardmäßig deaktiviert
   };
   
   proposals.unshift(newProposal);
@@ -160,12 +144,10 @@ app.post('/api/proposals/:id/vote', (req, res) => {
     return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
   }
 
-  // Voting ist nur in der Phase "entscheidung_pending" erlaubt
   if (proposal.status !== 'entscheidung_pending') {
     return res.status(403).json({ message: 'Abstimmen ist in diesem Status nicht erlaubt' });
   }
 
-  // Check ob User bereits abgestimmt hat
   if (proposal.voters.includes(username)) {
     return res.status(400).json({ message: 'Du hast bereits abgestimmt' });
   }
@@ -176,12 +158,10 @@ app.post('/api/proposals/:id/vote', (req, res) => {
   return res.json(proposal);
 });
 
-
-// Validator: Vorschlag freigeben
-// Validator: Vorschlag formell freigeben (ohne Veröffentlichung)
-// Validator: Vorschlag formell freigeben (-> rechtliche_prüfung)
+// Validator: Vorschlag freigeben (mit optionaler Commitment-Aktivierung)
 app.post('/api/proposals/:id/approve', (req, res) => {
   const { id } = req.params;
+  const { commitmentEnabled } = req.body;  // NEU: Validator sendet diese Option mit
   const proposal = proposals.find(p => p.id === parseInt(id));
 
   if (!proposal) {
@@ -193,14 +173,13 @@ app.post('/api/proposals/:id/approve', (req, res) => {
   }
 
   proposal.status = 'rechtliche_prüfung';
+  proposal.commitmentEnabled = commitmentEnabled === true;  // NEU: Setzt den Wert
   res.json(proposal);
 });
-
 
 // Validator: Vorschlag ablehnen
 app.post('/api/proposals/:id/reject', (req, res) => {
   const { id } = req.params;
-  const { reason } = req.body;
   const proposal = proposals.find(p => p.id === parseInt(id));
   
   if (!proposal) {
@@ -222,18 +201,16 @@ app.post('/api/proposals/:id/legal-check', (req, res) => {
     return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
   }
 
-if (approved) {
-  // Nach rechtlicher Prüfung geht es in die Voting/Veröffentlichungsphase
-  proposal.status = 'entscheidung_pending';
-  proposal.legalCheck = true;
-} else {
+  if (approved) {
+    proposal.status = 'entscheidung_pending';
+    proposal.legalCheck = true;
+  } else {
     proposal.status = 'abgelehnt_rechtlich';
     proposal.rejectionReason = reason || null;
   }
 
   res.json(proposal);
 });
-
 
 // Admin: Schulleitung Entscheidung
 app.post('/api/proposals/:id/decision', (req, res) => {
@@ -278,6 +255,7 @@ app.delete('/api/proposals/:id', (req, res) => {
   proposals.splice(index, 1);
   res.json({ message: 'Vorschlag gelöscht' });
 });
+
 // Commitment: Mithelfen bei der Umsetzung
 app.post('/api/proposals/:id/commit', (req, res) => {
   const { id } = req.params;
@@ -288,8 +266,12 @@ app.post('/api/proposals/:id/commit', (req, res) => {
     return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
   }
 
-  // Nur sinnvoll bei Umsetzung / angenommen
-if (!['entscheidung_pending', 'angenommen'].includes(proposal.status)) {
+  // NEU: Commitment ist nur erlaubt wenn der Validator es aktiviert hat
+  if (!proposal.commitmentEnabled) {
+    return res.status(403).json({ message: 'Mithelfen ist für diesen Vorschlag nicht aktiviert' });
+  }
+
+  if (!['entscheidung_pending', 'angenommen'].includes(proposal.status)) {
     return res.status(403).json({ message: 'Commitment in diesem Status nicht möglich' });
   }
 
@@ -311,7 +293,6 @@ app.get('/api/proposals/:id/messages', (req, res) => {
 
   if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
 
-  // Zugriff: nur Admin oder Committed-Voter
   const isAdmin = role === 'admin';
   const isCommitted = proposal.commitments.includes(username);
   if (!isAdmin && !isCommitted) {
@@ -333,7 +314,6 @@ app.post('/api/proposals/:id/messages', (req, res) => {
   const isAdmin = role === 'admin';
   const isCommitted = proposal.commitments.includes(username);
 
-  // Admin darf immer schreiben; Voter nur wenn Admin schon eine Nachricht gesendet hat
   if (!isAdmin && !isCommitted) {
     return res.status(403).json({ message: 'Kein Zugriff' });
   }

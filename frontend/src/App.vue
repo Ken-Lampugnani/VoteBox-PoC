@@ -48,7 +48,7 @@
     </div>
 
     <!-- Main App -->
-    <div v-else>
+    <div v-else :class="['theme-' + currentUser.role]">
       <header>
         <div class="header-content">
           <div>
@@ -56,7 +56,9 @@
               <img src="./votebox_logo.png" alt="Logo" class="logo" />
               <h1>VoteBox</h1>
             </div>
-            <p>Angemeldet als: <strong>{{ currentUser.username }}</strong> ({{ getRoleName(currentUser.role) }})</p>
+            <p>Angemeldet als: <strong>{{ currentUser.username }}</strong>
+              <span class="role-badge">{{ getRoleName(currentUser.role) }}</span>
+            </p>
           </div>
           <button @click="logout" class="logout-btn">Abmelden</button>
         </div>
@@ -203,7 +205,8 @@
                 ✓ Du hast abgestimmt
               </span>
 
-              <div class="commitment">
+              <!-- COMMITMENT: nur anzeigen wenn vom Validator aktiviert -->
+              <div v-if="proposal.commitmentEnabled" class="commitment">
                 <button
                   v-if="['entscheidung_pending', 'angenommen'].includes(proposal.status) && !hasCommitted(proposal)"
                   @click="commit(proposal.id)"
@@ -307,7 +310,22 @@
                 <span>👍 {{ proposal.votes }} Stimmen</span>
               </div>
               
+              <!-- VALIDATOR AKTIONEN mit Commitment-Checkbox -->
               <div v-if="proposal.status === 'validierung'" class="admin-actions">
+                <!-- NEU: Commitment-Option vor der Freigabe -->
+                <div class="commitment-toggle">
+                  <label class="commitment-toggle-label">
+                    <input
+                      type="checkbox"
+                      v-model="commitmentToggles[proposal.id]"
+                    />
+                    <span>🤝 Mithelfen-Funktion für diesen Vorschlag aktivieren</span>
+                  </label>
+                  <p class="commitment-toggle-hint">
+                    Aktiviere dies, wenn Schüler*innen sich bei der Umsetzung einbringen sollen.
+                  </p>
+                </div>
+
                 <button @click="approveProposal(proposal.id)" class="approve-btn">
                   ✓ Freigeben
                 </button>
@@ -397,6 +415,9 @@
                 <span>Eingereicht: {{ formatDate(proposal.timestamp) }}</span>
                 <span>👍 {{ proposal.votes }} Stimmen (Schwelle: {{ RELEVANCE_THRESHOLD }})</span>
                 <span>🤝 {{ proposal.commitments?.length || 0 }} helfen mit</span>
+                <!-- Zeigt dem Admin ob Commitment aktiv ist -->
+                <span v-if="proposal.commitmentEnabled" class="commitment-active-badge">🤝 Mithelfen aktiv</span>
+                <span v-else class="commitment-inactive-badge">🤝 Mithelfen inaktiv</span>
               </div>
 
               <div v-if="proposal.status === 'rechtliche_prüfung'" class="admin-actions">
@@ -674,6 +695,8 @@ export default {
       overviewProposals: [],
       rejectionReasons: {},
       legalReasons: {},
+      // NEU: Speichert den Commitment-Toggle-Status des Validators pro Vorschlag
+      commitmentToggles: {},
       chatMessages: {},
       chatInputs: {},
       openChats: {},
@@ -943,10 +966,16 @@ export default {
       }
     },
     
+    // NEU: Sendet commitmentEnabled aus dem Toggle-Status des Validators mit
     async approveProposal(proposalId) {
       try {
-        await axios.post(`${API_URL}/proposals/${proposalId}/approve`);
-        this.showSuccessMessage('Vorschlag freigegeben!');
+        const commitmentEnabled = this.commitmentToggles[proposalId] === true;
+        await axios.post(`${API_URL}/proposals/${proposalId}/approve`, { commitmentEnabled });
+        this.showSuccessMessage(
+          commitmentEnabled
+            ? 'Vorschlag freigegeben (Mithelfen aktiviert)'
+            : 'Vorschlag freigegeben'
+        );
         this.loadProposals();
       } catch (error) {
         alert('Fehler beim Freigeben');
@@ -1060,7 +1089,7 @@ export default {
 <style>
 /* ── VoteBox Farbpalette ───────────────────────────── */
 :root {
-  /* Primär: Blauviolett */
+  /* Primär Voter: Blauviolett */
   --vb-primary-50:  #EEEDFE;
   --vb-primary-100: #CECBF6;
   --vb-primary-200: #AFA9EC;
@@ -1095,6 +1124,98 @@ export default {
   --vb-gray-600: #5F5E5A;
 }
 
+/* ── Rollen-Themes ─────────────────────────────────── */
+
+/* VOTER – Blauviolett */
+.theme-voter header {
+  background: var(--vb-primary-900);
+  border-bottom: 4px solid var(--vb-primary-400);
+  box-shadow: 0 2px 12px rgba(38,33,92,0.35);
+}
+.theme-voter header h1,
+.theme-voter header p,
+.theme-voter header strong {
+  color: white;
+}
+.theme-voter .logout-btn {
+  background: var(--vb-primary-400);
+}
+.theme-voter .logout-btn:hover {
+  background: var(--vb-primary-200);
+  color: var(--vb-primary-900);
+}
+.theme-voter .role-badge {
+  background: var(--vb-primary-100);
+  color: var(--vb-primary-900);
+}
+.theme-voter .main-nav {
+  background: var(--vb-primary-800);
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.theme-voter .nav-tab-active {
+  border-bottom-color: var(--vb-primary-200) !important;
+}
+
+/* VALIDATOR – Amber/Gold */
+.theme-validator header {
+  background: #5a3a00;
+  border-bottom: 4px solid var(--vb-amber-400);
+  box-shadow: 0 2px 12px rgba(90,58,0,0.4);
+}
+.theme-validator header h1,
+.theme-validator header p,
+.theme-validator header strong {
+  color: white;
+}
+.theme-validator .logout-btn {
+  background: var(--vb-amber-400);
+  color: #5a3a00;
+}
+.theme-validator .logout-btn:hover {
+  background: var(--vb-amber-100);
+}
+.theme-validator .role-badge {
+  background: var(--vb-amber-100);
+  color: #5a3a00;
+}
+.theme-validator .main-nav {
+  background: #7a5000;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.theme-validator .nav-tab-active {
+  border-bottom-color: var(--vb-amber-100) !important;
+}
+
+/* ADMIN – Teal/Grün */
+.theme-admin header {
+  background: #0a3d2e;
+  border-bottom: 4px solid var(--vb-teal-400);
+  box-shadow: 0 2px 12px rgba(10,61,46,0.4);
+}
+.theme-admin header h1,
+.theme-admin header p,
+.theme-admin header strong {
+  color: white;
+}
+.theme-admin .logout-btn {
+  background: var(--vb-teal-400);
+}
+.theme-admin .logout-btn:hover {
+  background: var(--vb-teal-100);
+  color: #0a3d2e;
+}
+.theme-admin .role-badge {
+  background: var(--vb-teal-100);
+  color: #0a3d2e;
+}
+.theme-admin .main-nav {
+  background: #0f5540;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.theme-admin .nav-tab-active {
+  border-bottom-color: var(--vb-teal-200) !important;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -1103,7 +1224,6 @@ export default {
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  /* ✅ NEU: Violett-Gradient passend zur Primärfarbe */
   background: linear-gradient(135deg, var(--vb-primary-900) 0%, var(--vb-primary-600) 100%);
   min-height: 100vh;
 }
@@ -1123,7 +1243,6 @@ body {
 
 .commit-btn {
   padding: 10px 16.5px;
-  /* ✅ NEU: Türkis statt Grün */
   background: var(--vb-teal-400);
   color: white;
   border: none;
@@ -1138,7 +1257,6 @@ body {
 }
 
 .committed-text {
-  /* ✅ NEU: Türkis */
   color: var(--vb-teal-600);
   font-weight: 600;
 }
@@ -1146,6 +1264,63 @@ body {
 .commitment-count {
   font-size: 0.9em;
   color: #374151;
+}
+
+/* NEU: Commitment-Toggle im Validator-View */
+.commitment-toggle {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  background: var(--vb-teal-50);
+  border: 1.5px solid var(--vb-teal-100);
+  border-radius: 8px;
+}
+
+.commitment-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  color: var(--vb-teal-600);
+  cursor: pointer;
+  font-size: 0.97em;
+}
+
+.commitment-toggle-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--vb-teal-400);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.commitment-toggle-hint {
+  margin-top: 6px;
+  margin-left: 28px;
+  font-size: 0.83em;
+  color: var(--vb-teal-600);
+  opacity: 0.8;
+}
+
+/* NEU: Badges für Commitment-Status im Admin-View */
+.commitment-active-badge {
+  padding: 2px 10px;
+  background: var(--vb-teal-50);
+  color: var(--vb-teal-600);
+  border: 1px solid var(--vb-teal-100);
+  border-radius: 999px;
+  font-size: 0.82em;
+  font-weight: 600;
+}
+
+.commitment-inactive-badge {
+  padding: 2px 10px;
+  background: var(--vb-gray-50);
+  color: var(--vb-gray-400);
+  border: 1px solid var(--vb-gray-100);
+  border-radius: 999px;
+  font-size: 0.82em;
+  font-weight: 600;
 }
 
 /* ── LOGIN ─────────────────────────────────────────── */
@@ -1164,13 +1339,11 @@ body {
   box-shadow: 0 8px 32px rgba(38, 33, 92, 0.25);
   max-width: 400px;
   width: 100%;
-  /* ✅ NEU: dezenter lila Rand oben */
   border-top: 4px solid var(--vb-primary-400);
 }
 
 .login-box h1 {
   text-align: center;
-  /* ✅ NEU: Dunkelviolett */
   color: var(--vb-primary-900);
   margin-bottom: 10px;
 }
@@ -1184,7 +1357,6 @@ body {
 .login-btn {
   width: 100%;
   padding: 15px;
-  /* ✅ NEU: Primärviolett */
   background: var(--vb-primary-400);
   color: white;
   border: none;
@@ -1200,7 +1372,6 @@ body {
 }
 
 .error-message {
-  /* ✅ NEU: Coral statt reines Rot */
   background: var(--vb-coral-400);
   color: white;
   padding: 12px;
@@ -1222,7 +1393,6 @@ body {
 }
 
 .test-accounts code {
-  /* ✅ NEU: dezent lila hinterlegt */
   background: var(--vb-primary-50);
   color: var(--vb-primary-800);
   padding: 2px 6px;
@@ -1235,9 +1405,20 @@ header {
   background: rgba(255, 255, 255, 0.97);
   padding: 20px;
   box-shadow: 0 2px 8px rgba(38, 33, 92, 0.12);
-  margin-bottom: 20px;
-  /* ✅ NEU: lila Akzentlinie unten */
+  margin-bottom: 0;
   border-bottom: 3px solid var(--vb-primary-400);
+}
+
+.role-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.82em;
+  font-weight: 600;
+  vertical-align: middle;
+  background: var(--vb-primary-100);
+  color: var(--vb-primary-800);
 }
 
 .header-content {
@@ -1249,20 +1430,18 @@ header {
 }
 
 header h1 {
-  /* ✅ NEU: Dunkelviolett */
   color: var(--vb-primary-900);
   font-size: 2em;
   margin-bottom: 5px;
 }
 
 header p {
-  color: #666;
+  color: rgba(255,255,255,0.75);
   font-size: 0.9em;
 }
 
 .logout-btn {
   padding: 10px 20px;
-  /* ✅ NEU: Coral statt reines Rot */
   background: var(--vb-coral-400);
   color: white;
   border: none;
@@ -1286,7 +1465,6 @@ header p {
 }
 
 .success-message {
-  /* ✅ NEU: Türkis statt generisches Grün */
   background: var(--vb-teal-400);
   color: white;
   padding: 15px;
@@ -1307,10 +1485,8 @@ header p {
   margin-bottom: 20px;
 }
 
-/* Überschriften in Containern */
 .form-container h2,
 .proposals-container h2 {
-  /* ✅ NEU: Dunkelviolett */
   color: var(--vb-primary-900);
   margin-bottom: 20px;
 }
@@ -1323,7 +1499,6 @@ header p {
   display: block;
   margin-bottom: 8px;
   font-weight: 600;
-  /* ✅ NEU: Dunkelviolett */
   color: var(--vb-primary-900);
 }
 
@@ -1358,7 +1533,6 @@ header p {
 .submit-btn {
   width: 100%;
   padding: 15px;
-  /* ✅ NEU: Primärviolett */
   background: var(--vb-primary-400);
   color: white;
   border: none;
@@ -1398,7 +1572,6 @@ header p {
 
 .filter-tabs button {
   padding: 10px 20px;
-  /* ✅ NEU: dezentes Lila-Hintergrund */
   background: var(--vb-primary-50);
   border: 2px solid transparent;
   border-radius: 6px;
@@ -1409,7 +1582,6 @@ header p {
 }
 
 .filter-tabs button.active {
-  /* ✅ NEU: Primärviolett */
   background: var(--vb-primary-400);
   color: white;
   border-color: var(--vb-primary-400);
@@ -1438,7 +1610,6 @@ header p {
   border: 1px solid rgba(0,0,0,0.08);
 }
 
-/* ✅ NEU: Phase-Farben mit VoteBox-Palette */
 .phase-validation    { background: var(--vb-amber-50);  color: var(--vb-amber-800); }
 .phase-legal         { background: var(--vb-amber-100); color: var(--vb-amber-800); }
 .phase-voting        { background: var(--vb-primary-50); color: var(--vb-primary-800); }
@@ -1469,7 +1640,6 @@ header p {
 
 .relevance-ok {
   font-weight: 700;
-  /* ✅ NEU: Türkis */
   color: var(--vb-teal-600);
   font-size: 0.9em;
 }
@@ -1490,7 +1660,6 @@ header p {
 
 .progress-bar {
   height: 100%;
-  /* ✅ NEU: Primärviolett */
   background: var(--vb-primary-400);
   border-radius: 999px;
   transition: width 0.25s ease;
@@ -1503,7 +1672,6 @@ header p {
 }
 
 .proposal-card {
-  /* ✅ NEU: lila Rand */
   border: 2px solid var(--vb-primary-100);
   padding: 20px;
   border-radius: 8px;
@@ -1542,7 +1710,6 @@ header p {
   white-space: nowrap;
 }
 
-/* ✅ NEU: Badges mit VoteBox-Palette */
 .badge-validierung         { background: var(--vb-amber-100);  color: var(--vb-amber-800); }
 .badge-veröffentlicht      { background: var(--vb-teal-100);   color: var(--vb-teal-600); }
 .badge-rechtliche_prüfung  { background: var(--vb-amber-100);  color: var(--vb-amber-800); }
@@ -1578,7 +1745,6 @@ header p {
 
 .votes {
   font-weight: 600;
-  /* ✅ NEU: Primärviolett */
   color: var(--vb-primary-600);
 }
 
@@ -1586,7 +1752,6 @@ header p {
 .vote-btn {
   margin-top: 15px;
   padding: 10px 20px;
-  /* ✅ NEU: Türkis statt Grün */
   background: var(--vb-teal-400);
   color: white;
   border: none;
@@ -1625,7 +1790,6 @@ header p {
 
 .approve-btn {
   padding: 10px 20px;
-  /* ✅ NEU: Türkis */
   background: var(--vb-teal-400);
   color: white;
   border: none;
@@ -1641,7 +1805,6 @@ header p {
 
 .reject-btn {
   padding: 10px 20px;
-  /* ✅ NEU: Coral */
   background: var(--vb-coral-400);
   color: white;
   border: none;
@@ -1674,7 +1837,6 @@ header p {
 .rejection-reason {
   margin-top: 10px;
   padding: 10px;
-  /* ✅ NEU: Amber statt gelb */
   background: var(--vb-amber-50);
   border-left: 4px solid var(--vb-amber-400);
   border-radius: 4px;
@@ -1923,10 +2085,6 @@ header p {
   border-bottom-left-radius: 4px;
 }
 
-.chat-message-other.chat-message-admin .chat-message-bubble {
-  border-color: var(--vb-primary-200);
-}
-
 .chat-input-row {
   display: flex;
   gap: 10px;
@@ -2067,7 +2225,6 @@ header p {
   font-size: 0.95em;
 }
 
-/* Stat-Karten */
 .overview-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -2104,8 +2261,6 @@ header p {
 .stat-voting    { border-color: var(--vb-primary-100); }
 .stat-rejected  { border-color: var(--vb-coral-200);   }
 
-/* Gruppen-Grid */
-/* Gruppen-Grid: 3 oben, 2 unten zentriert */
 .overview-groups {
   display: flex;
   gap: 16px;
@@ -2153,7 +2308,6 @@ header p {
   font-weight: 700;
 }
 
-/* Group color schemes */
 .group-accepted  .group-header { background: var(--vb-teal-50);    color: var(--vb-teal-600); }
 .group-voting    .group-header { background: var(--vb-primary-100); color: var(--vb-primary-800); }
 .group-legal     .group-header { background: var(--vb-amber-50);   color: var(--vb-amber-800); }
