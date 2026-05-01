@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const db = require('./db');
 
 const app = express();
 const PORT = 3000;
@@ -9,333 +10,309 @@ const PORT = 3000;
 app.use(cors());
 app.use(bodyParser.json());
 
-// Test-Benutzer
+// Test-Benutzer (bleibt In-Memory — Authentifizierung ist nicht Teil dieses Projekts)
 const users = {
-  voter1: { username: 'voter1', password: 'test123', role: 'voter' },
-  voter2: { username: 'voter2', password: 'test123', role: 'voter' },
-  voter3: { username: 'voter3', password: 'test123', role: 'voter' },
-  voter4: { username: 'voter4', password: 'test123', role: 'voter' },
-  voter5: { username: 'voter5', password: 'test123', role: 'voter' },
-  admin: { username: 'admin', password: 'admin123', role: 'admin' },
-  validator: { username: 'validator', password: 'val123', role: 'validator' }
+  voter1:    { username: 'voter1',    password: 'test123',  role: 'voter' },
+  voter2:    { username: 'voter2',    password: 'test123',  role: 'voter' },
+  voter3:    { username: 'voter3',    password: 'test123',  role: 'voter' },
+  voter4:    { username: 'voter4',    password: 'test123',  role: 'voter' },
+  voter5:    { username: 'voter5',    password: 'test123',  role: 'voter' },
+  admin:     { username: 'admin',     password: 'admin123', role: 'admin' },
+  validator: { username: 'validator', password: 'val123',   role: 'validator' },
 };
 
-// Temporärer Speicher
-let proposals = [
-  {
-    id: 1,
-    title: 'Schüler-Pausenhof-Umgestaltung',
-    description: 'Wir möchten den Pausenhof gemütlicher und attraktiver gestalten – mit Sitzmöglichkeiten, Pflanzen, Spielen und Graffiti-Wänden. Bevor wir Pläne umsetzen, sollen alle Schüler*innen über die besten Ideen abstimmen, damit wir genau wissen, welche Bereiche am wichtigsten sind und welche Vorschläge die größte Zustimmung haben.',
-    author: 'Anonym',
-    submitter: 'voter1',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-    votes: 0,
-    voters: [],
-    commitments: [],
-    status: 'validierung',
-    rejectionReason: null,
-    legalCheck: true,
-    schoolDecision: null,
-    messages: [],
-    commitmentEnabled: false  // NEU: Validator entscheidet ob Mithelfen möglich ist
-  },
-  {
-    id: 2,
-    title: '17 Wochen Ferien pro Jahr',
-    description: 'Wir schlagen vor, die Ferien auf insgesamt 17 Wochen im Jahr auszudehnen – also fast die Hälfte des Schuljahres. Das würde mehr Freizeit, Erholung und Möglichkeiten für Reisen bieten.',
-    author: 'Max Muster',
-    submitter: 'voter2',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
-    votes: 0,
-    voters: [],
-    commitments: [],
-    status: 'validierung',
-    rejectionReason: null,
-    legalCheck: true,
-    schoolDecision: null,
-    messages: [],
-    commitmentEnabled: false  // NEU
-  },
-];
-let nextId = 3;
-
-// Schwellenwert für Relevanzschwelle
 const RELEVANCE_THRESHOLD = 2;
 
-// Login
+// ── HILFSFUNKTION ─────────────────────────────────────
+// Liest ein Proposal aus der DB und hängt votes[], commitments[] und messages[] an,
+// damit das Frontend exakt dasselbe Format wie vorher bekommt.
+function getProposalById(id) {
+  const proposal = db.prepare('SELECT * FROM proposals WHERE id = ?').get(id);
+  if (!proposal) return null;
+  return enrichProposal(proposal);
+}
+
+function enrichProposal(proposal) {
+  const voters = db
+    .prepare('SELECT username FROM votes WHERE proposal_id = ?')
+    .all(proposal.id)
+    .map(r => r.username);
+
+  const commitments = db
+    .prepare('SELECT username FROM commitments WHERE proposal_id = ?')
+    .all(proposal.id)
+    .map(r => r.username);
+
+  const messages = db
+    .prepare('SELECT * FROM messages WHERE proposal_id = ? ORDER BY id ASC')
+    .all(proposal.id);
+
+  return {
+    id:                proposal.id,
+    title:             proposal.title,
+    description:       proposal.description,
+    author:            proposal.author,
+    submitter:         proposal.submitter,
+    timestamp:         proposal.timestamp,
+    status:            proposal.status,
+    rejectionReason:   proposal.rejection_reason,
+    legalCheck:        proposal.legal_check === 1,
+    schoolDecision:    proposal.school_decision,
+    commitmentEnabled: proposal.commitment_enabled === 1,
+    votes:             voters.length,
+    voters,
+    commitments,
+    messages,
+  };
+}
+
+function getAllProposals() {
+  const rows = db.prepare('SELECT * FROM proposals ORDER BY id DESC').all();
+  return rows.map(enrichProposal);
+}
+
+// ── LOGIN ─────────────────────────────────────────────
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   const user = users[username];
-  
   if (user && user.password === password) {
-    res.json({ 
-      success: true, 
-      user: { username: user.username, role: user.role } 
-    });
+    res.json({ success: true, user: { username: user.username, role: user.role } });
   } else {
     res.status(401).json({ success: false, message: 'Ungültige Anmeldedaten' });
   }
 });
 
-// Alle Vorschläge abrufen (rollenbasiert)
+// ── PROPOSALS ABRUFEN (rollenbasiert) ─────────────────
 app.get('/api/proposals', (req, res) => {
   const { role } = req.query;
+  const all = getAllProposals();
 
   if (role === 'voter') {
-    return res.json(proposals.filter(p =>
+    return res.json(all.filter(p =>
       p.status === 'entscheidung_pending' ||
       p.status === 'angenommen' ||
       p.status === 'abgelehnt'
     ));
   }
-
   if (role === 'validator') {
-    return res.json(proposals.filter(p => p.status === 'validierung'));
+    return res.json(all.filter(p => p.status === 'validierung'));
   }
-
-  // Admin sieht ALLES
-  return res.json(proposals);
+  return res.json(all);
 });
 
-// Alle Vorschläge für Übersicht (rollenunabhängig, nur lesen)
+// ── ÜBERSICHT (rollenunabhängig) ───────────────────────
 app.get('/api/proposals/overview', (req, res) => {
-  return res.json(proposals);
+  res.json(getAllProposals());
 });
 
-// Vorschlag einreichen
+// ── PROPOSAL EINREICHEN ────────────────────────────────
 app.post('/api/proposals', (req, res) => {
   const { title, description, author, isAnonymous, submitter } = req.body;
-  
+
   const inappropriateWords = ['badword1', 'badword2'];
-  const hasInappropriateContent = inappropriateWords.some(word => 
+  const hasInappropriateContent = inappropriateWords.some(word =>
     title.toLowerCase().includes(word) || description.toLowerCase().includes(word)
   );
-  
-  const newProposal = {
-    id: nextId++,
+
+  const status          = hasInappropriateContent ? 'abgelehnt_filter' : 'validierung';
+  const rejectionReason = hasInappropriateContent ? 'Unangemessener Inhalt erkannt' : null;
+
+  const result = db.prepare(`
+    INSERT INTO proposals (title, description, author, submitter, timestamp, status, rejection_reason, legal_check, school_decision, commitment_enabled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, 0)
+  `).run(
     title,
     description,
-    author: isAnonymous ? 'Anonym' : author,
+    isAnonymous ? 'Anonym' : author,
     submitter,
-    timestamp: new Date().toISOString(),
-    votes: 0,
-    voters: [],
-    commitments: [],
-    status: hasInappropriateContent ? 'abgelehnt_filter' : 'validierung',
-    rejectionReason: hasInappropriateContent ? 'Unangemessener Inhalt erkannt' : null,
-    legalCheck: false,
-    schoolDecision: null,
-    messages: [],
-    commitmentEnabled: false  // NEU: Standardmäßig deaktiviert
-  };
-  
-  proposals.unshift(newProposal);
-  res.status(201).json(newProposal);
+    new Date().toISOString(),
+    status,
+    rejectionReason
+  );
+
+  res.status(201).json(getProposalById(result.lastInsertRowid));
 });
 
-// Vorschlag abstimmen
+// ── ABSTIMMEN ─────────────────────────────────────────
 app.post('/api/proposals/:id/vote', (req, res) => {
-  const { id } = req.params;
+  const id = parseInt(req.params.id);
   const { username } = req.body;
 
-  const proposal = proposals.find(p => p.id === parseInt(id));
-
-  if (!proposal) {
-    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
-  }
-
-  if (proposal.status !== 'entscheidung_pending') {
+  const proposal = getProposalById(id);
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  if (proposal.status !== 'entscheidung_pending')
     return res.status(403).json({ message: 'Abstimmen ist in diesem Status nicht erlaubt' });
-  }
+  if (proposal.voters.includes(username))
+    return res.status(400).json({ message: 'Du hast bereits abgestimmt' });
 
-  if (proposal.voters.includes(username)) {
+  try {
+    db.prepare('INSERT INTO votes (proposal_id, username) VALUES (?, ?)').run(id, username);
+  } catch (e) {
+    // UNIQUE-Constraint verletzt — Doppelabstimmung
     return res.status(400).json({ message: 'Du hast bereits abgestimmt' });
   }
 
-  proposal.votes++;
-  proposal.voters.push(username);
-
-  return res.json(proposal);
+  res.json(getProposalById(id));
 });
 
-// Validator: Vorschlag freigeben (mit optionaler Commitment-Aktivierung)
+// ── VALIDATOR: FREIGEBEN ──────────────────────────────
 app.post('/api/proposals/:id/approve', (req, res) => {
-  const { id } = req.params;
-  const { commitmentEnabled } = req.body;  // NEU: Validator sendet diese Option mit
-  const proposal = proposals.find(p => p.id === parseInt(id));
+  const id = parseInt(req.params.id);
+  const { commitmentEnabled } = req.body;
 
-  if (!proposal) {
-    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
-  }
-
-  if (proposal.status !== 'validierung') {
+  const proposal = getProposalById(id);
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  if (proposal.status !== 'validierung')
     return res.status(400).json({ message: 'Nur Vorschläge im Status "validierung" können freigegeben werden' });
-  }
 
-  proposal.status = 'rechtliche_prüfung';
-  proposal.commitmentEnabled = commitmentEnabled === true;  // NEU: Setzt den Wert
-  res.json(proposal);
+  db.prepare(`
+    UPDATE proposals SET status = 'rechtliche_prüfung', commitment_enabled = ? WHERE id = ?
+  `).run(commitmentEnabled === true ? 1 : 0, id);
+
+  res.json(getProposalById(id));
 });
 
-// Validator: Vorschlag ablehnen
+// ── VALIDATOR: ABLEHNEN ───────────────────────────────
 app.post('/api/proposals/:id/reject', (req, res) => {
-  const { id } = req.params;
-  const proposal = proposals.find(p => p.id === parseInt(id));
-  
-  if (!proposal) {
-    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
-  }
-  
-  proposal.status = 'abgelehnt_validator';
-  proposal.rejectionReason = 'Formelle Erwartungen nicht erfüllt';
-  res.json(proposal);
+  const id = parseInt(req.params.id);
+
+  const proposal = getProposalById(id);
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+
+  db.prepare(`
+    UPDATE proposals SET status = 'abgelehnt_validator', rejection_reason = ? WHERE id = ?
+  `).run('Formelle Erwartungen nicht erfüllt', id);
+
+  res.json(getProposalById(id));
 });
 
-// Admin: Rechtliche Prüfung abschließen
+// ── ADMIN: RECHTLICHE PRÜFUNG ─────────────────────────
 app.post('/api/proposals/:id/legal-check', (req, res) => {
-  const { id } = req.params;
+  const id = parseInt(req.params.id);
   const { approved, reason } = req.body;
-  const proposal = proposals.find(p => p.id === parseInt(id));
 
-  if (!proposal) {
-    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
-  }
+  const proposal = getProposalById(id);
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
 
   if (approved) {
-    proposal.status = 'entscheidung_pending';
-    proposal.legalCheck = true;
+    db.prepare(`
+      UPDATE proposals SET status = 'entscheidung_pending', legal_check = 1 WHERE id = ?
+    `).run(id);
   } else {
-    proposal.status = 'abgelehnt_rechtlich';
-    proposal.rejectionReason = reason || null;
+    db.prepare(`
+      UPDATE proposals SET status = 'abgelehnt_rechtlich', rejection_reason = ? WHERE id = ?
+    `).run(reason || null, id);
   }
 
-  res.json(proposal);
+  res.json(getProposalById(id));
 });
 
-// Admin: Schulleitung Entscheidung
+// ── ADMIN: SCHULENTSCHEID ─────────────────────────────
 app.post('/api/proposals/:id/decision', (req, res) => {
-  const { id } = req.params;
+  const id = parseInt(req.params.id);
   const { decision, reason } = req.body;
-  const proposal = proposals.find(p => p.id === parseInt(id));
-  
-  if (!proposal) {
-    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
-  }
-  if (proposal.votes < RELEVANCE_THRESHOLD) {
-    return res.status(403).json({
-      message: `Entscheidung erst ab ${RELEVANCE_THRESHOLD} Stimmen möglich`
-    });
+
+  const proposal = getProposalById(id);
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  if (proposal.votes < RELEVANCE_THRESHOLD)
+    return res.status(403).json({ message: `Entscheidung erst ab ${RELEVANCE_THRESHOLD} Stimmen möglich` });
+
+  if (decision === 'angenommen') {
+    db.prepare(`
+      UPDATE proposals SET status = 'angenommen', school_decision = 'angenommen', rejection_reason = NULL WHERE id = ?
+    `).run(id);
+  } else if (decision === 'abgelehnt') {
+    db.prepare(`
+      UPDATE proposals SET status = 'abgelehnt', school_decision = 'abgelehnt', rejection_reason = ? WHERE id = ?
+    `).run(reason || null, id);
   }
 
-  proposal.schoolDecision = decision;
-  
-  switch(decision) {
-    case 'angenommen':
-      proposal.status = 'angenommen';
-      proposal.rejectionReason = null;
-      break;
-    case 'abgelehnt':
-      proposal.status = 'abgelehnt';
-      proposal.rejectionReason = reason || null;
-      break;
-  }
-  
-  res.json(proposal);
+  res.json(getProposalById(id));
 });
 
-// Vorschlag löschen (Admin)
+// ── ADMIN: PROPOSAL LÖSCHEN ───────────────────────────
 app.delete('/api/proposals/:id', (req, res) => {
-  const { id } = req.params;
-  const index = proposals.findIndex(p => p.id === parseInt(id));
-  
-  if (index === -1) {
-    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
-  }
-  
-  proposals.splice(index, 1);
+  const id = parseInt(req.params.id);
+
+  const proposal = getProposalById(id);
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+
+  db.prepare('DELETE FROM proposals WHERE id = ?').run(id);
   res.json({ message: 'Vorschlag gelöscht' });
 });
 
-// Commitment: Mithelfen bei der Umsetzung
+// ── COMMITMENT ────────────────────────────────────────
 app.post('/api/proposals/:id/commit', (req, res) => {
-  const { id } = req.params;
+  const id = parseInt(req.params.id);
   const { username } = req.body;
 
-  const proposal = proposals.find(p => p.id === parseInt(id));
-  if (!proposal) {
-    return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
-  }
-
-  // NEU: Commitment ist nur erlaubt wenn der Validator es aktiviert hat
-  if (!proposal.commitmentEnabled) {
+  const proposal = getProposalById(id);
+  if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
+  if (!proposal.commitmentEnabled)
     return res.status(403).json({ message: 'Mithelfen ist für diesen Vorschlag nicht aktiviert' });
-  }
-
-  if (!['entscheidung_pending', 'angenommen'].includes(proposal.status)) {
+  if (!['entscheidung_pending', 'angenommen'].includes(proposal.status))
     return res.status(403).json({ message: 'Commitment in diesem Status nicht möglich' });
-  }
+  if (proposal.commitments.includes(username))
+    return res.status(400).json({ message: 'Du hast dich bereits eingetragen' });
 
-  if (proposal.commitments.includes(username)) {
+  try {
+    db.prepare('INSERT INTO commitments (proposal_id, username) VALUES (?, ?)').run(id, username);
+  } catch (e) {
     return res.status(400).json({ message: 'Du hast dich bereits eingetragen' });
   }
 
-  proposal.commitments.push(username);
-  res.json(proposal);
+  res.json(getProposalById(id));
 });
 
-// ── CHAT ──────────────────────────────────────────────
-
-// Nachrichten eines Vorschlags abrufen
+// ── CHAT: NACHRICHTEN ABRUFEN ─────────────────────────
 app.get('/api/proposals/:id/messages', (req, res) => {
-  const { id } = req.params;
+  const id = parseInt(req.params.id);
   const { username, role } = req.query;
-  const proposal = proposals.find(p => p.id === parseInt(id));
 
+  const proposal = getProposalById(id);
   if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
 
-  const isAdmin = role === 'admin';
+  const isAdmin     = role === 'admin';
   const isCommitted = proposal.commitments.includes(username);
-  if (!isAdmin && !isCommitted) {
+  if (!isAdmin && !isCommitted)
     return res.status(403).json({ message: 'Kein Zugriff auf diesen Chat' });
-  }
 
-  res.json(proposal.messages || []);
+  res.json(proposal.messages);
 });
 
-// Nachricht senden
+// ── CHAT: NACHRICHT SENDEN ────────────────────────────
 app.post('/api/proposals/:id/messages', (req, res) => {
-  const { id } = req.params;
+  const id = parseInt(req.params.id);
   const { username, role, text } = req.body;
-  const proposal = proposals.find(p => p.id === parseInt(id));
 
+  const proposal = getProposalById(id);
   if (!proposal) return res.status(404).json({ message: 'Vorschlag nicht gefunden' });
   if (!text?.trim()) return res.status(400).json({ message: 'Nachricht darf nicht leer sein' });
 
-  const isAdmin = role === 'admin';
+  const isAdmin     = role === 'admin';
   const isCommitted = proposal.commitments.includes(username);
 
-  if (!isAdmin && !isCommitted) {
+  if (!isAdmin && !isCommitted)
     return res.status(403).json({ message: 'Kein Zugriff' });
-  }
+
   if (!isAdmin) {
-    const adminStarted = (proposal.messages || []).some(m => m.role === 'admin');
-    if (!adminStarted) {
+    const adminStarted = proposal.messages.some(m => m.role === 'admin');
+    if (!adminStarted)
       return res.status(403).json({ message: 'Warte bis der Admin den Chat startet' });
-    }
   }
 
-  if (!proposal.messages) proposal.messages = [];
+  const timestamp = new Date().toISOString();
+  const result = db.prepare(`
+    INSERT INTO messages (proposal_id, username, role, text, timestamp) VALUES (?, ?, ?, ?, ?)
+  `).run(id, username, role, text.trim(), timestamp);
 
-  const msg = {
-    id: Date.now(),
+  res.status(201).json({
+    id: result.lastInsertRowid,
     username,
     role,
     text: text.trim(),
-    timestamp: new Date().toISOString()
-  };
-
-  proposal.messages.push(msg);
-  res.status(201).json(msg);
+    timestamp,
+  });
 });
 
 app.listen(PORT, () => {

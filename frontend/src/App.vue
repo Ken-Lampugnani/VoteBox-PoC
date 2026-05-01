@@ -884,9 +884,13 @@ export default {
           this.loginError = '';
           this.loadProposals();
         }
-      } catch (error) {
-        this.loginError = 'Ungültige Anmeldedaten';
-      }
+} catch (error) {
+  if (!error.response) {
+    this.loginError = 'Server nicht erreichbar.';
+  } else {
+    this.loginError = 'Ungültige Anmeldedaten';
+  }
+}
     },
     
     logout() {
